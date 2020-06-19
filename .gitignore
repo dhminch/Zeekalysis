@@ -129,8 +129,8 @@ dmypy.json
 .pyre/
 
 # Zeek logs
-.log
-.log.gz
+*.log
+*.log.gz
 
 # vim files
-.swp
+*.swp
