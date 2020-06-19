@@ -131,3 +131,6 @@ dmypy.json
 # Zeek logs
 .log
 .log.gz
+
+# vim files
+.swp
