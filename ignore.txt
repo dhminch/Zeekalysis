@@ -1,0 +1,5 @@
+# IP Addresses to ignore in analysis
+8.8.8.8	# Google DNS
+8.8.4.4 # Google DNS
+1.1.1.1 # Cloudflare DNS
+1.1.1.2 # Cloudflare DNS

@@ -8,6 +8,8 @@ import os
 import sqlite3
 import time
 
+IGNORE_LIST = 'ignore.txt'
+
 #class ZeekLog:
 #
 #    def __init__(self, directory, filename):
@@ -23,6 +25,25 @@ import time
 #                print("{} {}".format(basedir, dirname, current_file))
 #
 
+def load_ignore_list():
+    if not os.path.isfile(IGNORE_LIST):
+        raise ValueError("Cannot find ignore list file")
+
+    ignore_list = []
+
+    with open(IGNORE_LIST, "r") as ignorelist_file:
+        for line in ignorelist_file:
+            ip_text = line.split("#")[0].strip()
+            if ip_text == "":
+                continue
+
+            try:
+                ip_net = ipaddress.ip_network(ip_text)
+                ignore_list.append(ip_net)
+            except ValueError:
+                raise ValueError("Ignore list has an invalid IP address/network: {}".format(ip_text))
+
+    return ignore_list
 
 def parse_zeek_log(logfile):
     if not os.path.isfile(logfile):
@@ -120,6 +141,9 @@ def load_conn_into_db(conn, conn_log):
 
 
 def make_dns_associations(conn):
+    ignore_list = load_ignore_list()
+    print(ignore_list)
+
     dns_cursor = conn.cursor()
     dnsconn_cursor = conn.cursor()
     cursor = conn.cursor()
@@ -132,9 +156,16 @@ def make_dns_associations(conn):
         dip = conn_row[2]
         
         dip_ipaddr = ipaddress.ip_address(dip)
+        ignore = False
         if dip_ipaddr is ipaddress.IPv6Address:
-            continue
+            ignore = True
         if not dip_ipaddr.is_global or dip_ipaddr.is_multicast:
+            ignore = True
+        for ignore_net in ignore_list:
+            if dip_ipaddr in ignore_net:
+                ignore = True
+
+        if ignore:
             continue
 
         dns_cursor.execute('''SELECT id FROM dns 
