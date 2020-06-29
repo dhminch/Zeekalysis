@@ -2,28 +2,52 @@
 
 import argparse
 import binascii
+import datetime
 import gzip
 import ipaddress
 import os
+import re
 import sqlite3
 import time
 
 IGNORE_LIST = 'ignore.txt'
 
-#class ZeekLog:
-#
-#    def __init__(self, directory, filename):
-#        self.directory = directory
-#        self.filename = filename
-#
-#
-#
-#def find_logs(logdirs):
-#    for basedir in logdirs:
-#        for current_dir, subdirlist, filelist in os.walk(basedir):
-#            for current_file in filelist:
-#                print("{} {}".format(basedir, dirname, current_file))
-#
+def find_logs(logdir, start_date, end_date):
+    log_types = ['dns', 'conn']
+
+    found_logs = {}
+    for log_type in log_types:
+        found_logs[log_type] = []
+
+    for current_dir, subdirlist, filelist in os.walk(logdir):
+        for current_file in filelist:
+            current_file_path = os.path.join(current_dir, current_file)
+            
+            if not any([current_file.startswith(x) for x in log_types]):
+                continue
+
+            (_, logdate_string) = os.path.split(current_dir)
+            try:
+                logdate = datetime.date.fromisoformat(logdate_string)
+            except ValueError:
+                raise ValueError("The log directory is not in the expected Zeek layout, "
+                                    "where the last directory contains the date of the log files")
+
+            print("Log: {}\nLog Date: {}\nStart Date: {}\nEnd Date: {}\n\n".format(
+                    current_file_path, logdate, start_date, end_date))
+
+            if start_date is not None and logdate < start_date:
+                continue
+            if end_date is not None and logdate > end_date:
+                continue
+
+            log_type = current_file.split('.')[0]
+            if log_type in log_types:
+                found_logs[log_type].append(current_file_path)
+
+    return found_logs
+
+
 
 def load_ignore_list():
     if not os.path.isfile(IGNORE_LIST):
@@ -44,6 +68,11 @@ def load_ignore_list():
                 raise ValueError("Ignore list has an invalid IP address/network: {}".format(ip_text))
 
     return ignore_list
+
+def parse_zeek_logs(logfiles):
+    for logfile in logfiles:
+        for logentry in parse_zeek_log(logfile):
+            yield logentry
 
 def parse_zeek_log(logfile):
     if not os.path.isfile(logfile):
@@ -89,13 +118,13 @@ def parse_zeek_log(logfile):
 
 
 
-def load_dns_into_db(conn, dns_log):
+def load_dns_into_db(conn, dns_logs):
     cursor = conn.cursor()
     cursor.execute('''DROP TABLE IF EXISTS dns''')
     cursor.execute('''CREATE TABLE dns (id INTEGER PRIMARY KEY, timestamp REAL, sip TEXT, query TEXT, answer TEXT)''')
     conn.commit()
 
-    for line_dict in parse_zeek_log(dns_log):
+    for line_dict in parse_zeek_logs(dns_logs):
         if line_dict['qtype_name'] not in ['A']:
             continue
 
@@ -108,12 +137,12 @@ def load_dns_into_db(conn, dns_log):
     cursor.close()
 
 
-def load_conn_into_db(conn, conn_log):
+def load_conn_into_db(conn, conn_logs):
     cursor = conn.cursor()
     cursor.execute('''DROP TABLE IF EXISTS conn''')
     cursor.execute('''CREATE TABLE conn (id INTEGER PRIMARY KEY, timestamp REAL, sip TEXT, sport INTEGER, dip TEXT, dport INTEGER, proto TEXT, bytes INTEGER, duration REAL)''')
 
-    for line_dict in parse_zeek_log(conn_log):
+    for line_dict in parse_zeek_logs(conn_logs):
         if line_dict['orig_bytes'] == '-':
             orig_bytes = 0
         else:
@@ -191,29 +220,49 @@ def make_dns_associations(conn):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('dnslog')
-    parser.add_argument('connlog')
+    parser.add_argument('-s', '--start', help='Start Date (yyyy-mm-dd), inclusive')
+    parser.add_argument('-e', '--end', help='End Date (yyyy-mm-dd, inclusive')
+    parser.add_argument('-a', '--analyze', help='Perform only the analysis, do not reload logs')
+    parser.add_argument('logdir')
     args = parser.parse_args()
 
-    if not os.path.isfile(args.dnslog):
-        raise ValueError("The DNS log file given is not a file: {}".format(args.dnslog))
+    if not os.path.isdir(args.logdir):
+        raise ValueError("The log directory provided, {}, does not exist".format(args.logdir))
 
-    if not os.path.isfile(args.connlog):
-        raise ValueError("The Conection log file given is not a file: {}".format(args.connlog))        
+    if args.start:
+        try:
+            start_date = datetime.date.fromisoformat(args.start)
+        except ValueError:
+            raise ValueError("The start date provided, {}, is not a valid date in YYYY-MM-DD format"
+                                .format(args.start))
+    else:
+        start_date = None
+
+    if args.end:
+        try:
+            end_date = datetime.date.fromisoformat(args.end)
+        except ValueError:
+            raise ValueError("The end date provided, {}, is not a valid date in YYYY-MM-DD format"
+                                .format(args.end))
+    else:
+        end_date = None
+
+    found_logs = find_logs(args.logdir, start_date, end_date)
 
     conn = sqlite3.connect('zeekalysis.db')
     
-    print("Begin loading of DNS logs.")
-    load_dns_start = time.time()  
-    load_dns_into_db(conn, args.dnslog)
-    load_dns_stop = time.time()
-    print("Done loading of DNS logs ({:.2f} s).".format(load_dns_stop-load_dns_start))
-    
-    print("Begin loading of Connection logs.")
-    load_conn_start = time.time()
-    load_conn_into_db(conn, args.connlog)
-    load_conn_stop = time.time()
-    print("Done loading of Connection logs ({:.2f} s).".format(load_conn_stop-load_conn_start))
+    if not args.analyze:
+        print("Begin loading of DNS logs.")
+        load_dns_start = time.time()  
+        load_dns_into_db(conn, found_logs['dns'])
+        load_dns_stop = time.time()
+        print("Done loading of DNS logs ({:.2f} s).".format(load_dns_stop-load_dns_start))
+        
+        print("Begin loading of Connection logs.")
+        load_conn_start = time.time()
+        load_conn_into_db(conn, found_logs['conn'])
+        load_conn_stop = time.time()
+        print("Done loading of Connection logs ({:.2f} s).".format(load_conn_stop-load_conn_start))
     
     print("Begin making DNS associations.", end='')
     make_dns_assoc_start = time.time()
