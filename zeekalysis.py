@@ -33,9 +33,6 @@ def find_logs(logdir, start_date, end_date):
                 raise ValueError("The log directory is not in the expected Zeek layout, "
                                     "where the last directory contains the date of the log files")
 
-            print("Log: {}\nLog Date: {}\nStart Date: {}\nEnd Date: {}\n\n".format(
-                    current_file_path, logdate, start_date, end_date))
-
             if start_date is not None and logdate < start_date:
                 continue
             if end_date is not None and logdate > end_date:
